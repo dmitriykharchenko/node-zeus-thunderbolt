@@ -1,6 +1,6 @@
 {
   "name": "node-zeus-thunderbolt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Recursively prune eligible node_modules directories",
   "scripts": {
     "test": "node --test test/*.test.ts",

@@ -8,12 +8,12 @@ directory. It has no external dependencies and requires **Node.js >=23.6.0**
 
 This project is prepared for npm distribution but is not published by this
 workflow. Registry availability of the name is not guaranteed. From a checkout,
-run `npm pack`, then `npm install --global ./node-zeus-thunderbolt-0.1.0.tgz`.
+run `npm pack`, then `npm install --global ./node-zeus-thunderbolt-0.1.1.tgz`.
 Packing builds the JavaScript automatically; installation needs no build tools.
 Run `nzt --version` or `nzt --help` to check the installed command.
 
 Alternatively, install the tarball into a project with
-`npm install --save-dev /absolute/path/to/node-zeus-thunderbolt-0.1.0.tgz` and
+`npm install --save-dev /absolute/path/to/node-zeus-thunderbolt-0.1.1.tgz` and
 invoke `./node_modules/.bin/nzt` (or `node_modules\.bin\nzt.cmd` on Windows).
 
 ## Usage
