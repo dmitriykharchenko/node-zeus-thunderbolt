@@ -3,28 +3,37 @@ import metadata from '../package.json' with { type: 'json' };
 import { prune } from './prune.ts';
 import { createReporter } from './output.ts';
 
-const help = `Usage: nzt [--smite] [--dry-run] [--verbose] <directory>
+const help = `Usage: nzt [--smite] [--dry-run] [--verbose] [--estimate-space] <directory>
 
 Recursively remove node_modules when its immediate parent has regular files
 named package.json and package-lock.json, npm-shrinkwrap.json, yarn.lock,
-pnpm-lock.yaml, bun.lock, or bun.lockb. Eligible dependency trees are scanned
-only to estimate sizes, never to discover more projects. Skipped trees are not read.
+pnpm-lock.yaml, bun.lock, or bun.lockb. Dependency trees are never scanned to
+discover more projects. Only --estimate-space adds an eligible-tree size scan.
+Skipped trees are not read.
 
-  --smite     Remove node_modules even without manifest/lockfile markers
-  --dry-run   Show what would be removed without deleting anything
-  --verbose   Show each path, estimated size, skip reason, and final counts
-  --help      Show this help
-  --version   Show the version
-  --          End options (for paths beginning with a dash)
+  --smite           Remove node_modules even without manifest/lockfile markers
+  --dry-run         Show what would be removed without deleting anything
+  --verbose         Show each path, skip reason, and final counts
+  --estimate-space  Scan eligible trees for estimated freed/would-free bytes
+  --help            Show this help
+  --version         Show the version
+  --                End options (for paths beginning with a dash)
 
-Default output: running estimated freed/would-free bytes, removed/planned
-directories, and additional candidates requiring --smite (zero with --smite).
-Compact TTY output has a Braille spinner while scanning and measuring, then a
+Default output: running removed/planned directory counts and additional
+candidates requiring --smite (zero with --smite), without a size scan or bytes.
+Neither --dry-run nor --verbose enables estimates. Add --estimate-space for
+aggregate byte estimates and, with --verbose, per-path sizes.
+Compact TTY output has a Braille spinner while working, then a
 static final line. Verbose output and pipes never animate; pipes get plain
 newline updates. Errors always go to stderr.
 Sizes sum logical regular-file bytes without following symlinks,
 not exact disk reclamation (hardlinks, sparse/shared files, and metadata differ).
-Measuring adds a file-metadata scan before each removal, also in --dry-run.
+Opt-in measuring adds a file-metadata scan before each removal, also in --dry-run.
+
+Examples:
+  nzt --dry-run /path/to/projects
+  nzt --estimate-space --dry-run /path/to/projects
+  nzt --estimate-space --verbose /path/to/projects
 
 Deletion is permanent. Preview with --dry-run first. Directory symlinks and
 symlink candidates are skipped. Do not change the tree while pruning.
@@ -38,7 +47,7 @@ function parseArguments(args: string[]) {
     if (!optionsEnded && arg === '--') {
       optionsEnded = true;
     } else if (!optionsEnded && arg.startsWith('-')) {
-      if (!['--smite', '--dry-run', '--verbose', '--help', '--version'].includes(arg)) {
+      if (!['--smite', '--dry-run', '--verbose', '--estimate-space', '--help', '--version'].includes(arg)) {
         throw new Error(`Unknown option: ${JSON.stringify(arg)}`);
       }
       if (flags.has(arg)) throw new Error(`Repeated option: ${arg}`);
@@ -58,7 +67,7 @@ function parseArguments(args: string[]) {
   }
   return {
     path: paths[0], smite: flags.has('--smite'), dryRun: flags.has('--dry-run'),
-    verbose: flags.has('--verbose'),
+    verbose: flags.has('--verbose'), estimateSpace: flags.has('--estimate-space'),
   };
 }
 
@@ -80,6 +89,7 @@ async function main() {
     const summary = await prune(args.path, {
       smite: args.smite,
       dryRun: args.dryRun,
+      estimateSpace: args.estimateSpace,
       onEvent: reporter.onEvent,
     });
     reporter.finish(summary);

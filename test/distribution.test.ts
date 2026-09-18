@@ -5,7 +5,7 @@ import { delimiter, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import metadata from '../package.json' with { type: 'json' };
-import { exists, fixture, project, runTtyCli, snapshot } from './helpers.ts';
+import { exists, fixture, project, runCliWithoutSizeReads, runTtyCli, snapshot } from './helpers.ts';
 
 const repository = fileURLToPath(new URL('../', import.meta.url));
 const packageFiles = ['README.md', 'dist/cli.js', 'dist/output.js', 'dist/prune.js', 'package.json'];
@@ -80,6 +80,8 @@ test('packed npm distribution works under node_modules without sources or instal
     const help = run(bin, ['--help'], root).stdout;
     assert.match(help, /Usage: nzt/);
     assert.match(help, /--verbose/);
+    assert.match(help, /--estimate-space/);
+    assert.match(help, /Neither --dry-run nor --verbose enables estimates/);
     assert.match(help, /Braille spinner/);
     assert.equal(run(bin, ['--version'], root).stdout.trim(), metadata.version);
   });
@@ -90,7 +92,8 @@ test('packed npm distribution works under node_modules without sources or instal
       const result = run(bin, [...flags, '--dry-run', missing], root, 1);
       assert.match(result.stderr, /error:.*ENOENT/);
       assert.ok(result.stderr.includes(JSON.stringify(missing)));
-      assert.match(result.stdout, /Estimated would free: 0 B \| 0 planned \| 0 require --smite/);
+      assert.match(result.stdout, /0 planned \| 0 require --smite/);
+      assert.doesNotMatch(result.stdout, /estimated|bytes|\d B/i);
       assert.doesNotMatch(result.stdout, /[\r\x1b]|error:/);
     }
   });
@@ -106,7 +109,7 @@ test('packed npm distribution works under node_modules without sources or instal
 
   await t.test('installed dry-run leaves every fixture unchanged', async () => {
     const before = await snapshot(target);
-    const preview = run(bin, ['--dry-run', target], root);
+    const preview = run(bin, ['--estimate-space', '--dry-run', target], root);
     assert.match(preview.stdout, /Estimated would free: 1.50 KiB \| 2 planned \| 1 require --smite/);
     assert.doesNotMatch(preview.stdout, /[\r\x1b⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|planned:|skipped:|node_modules/);
     assert.equal(preview.stdout.trim().split('\n').length, 4);
@@ -116,7 +119,7 @@ test('packed npm distribution works under node_modules without sources or instal
 
   await t.test('installed verbose preview reports candidate sizes and skip reasons', async () => {
     const before = await snapshot(target);
-    const preview = run(bin, ['--verbose', '--dry-run', target], root);
+    const preview = run(bin, ['--estimate-space', '--verbose', '--dry-run', target], root);
     assert.ok(preview.stdout.includes(`planned: ${JSON.stringify(eligible)} — estimated 1.00 KiB (1024 bytes)`));
     assert.ok(preview.stdout.includes(`skipped: ${JSON.stringify(unmarked)}`));
     assert.match(preview.stdout, /requires regular package.json/);
@@ -126,7 +129,7 @@ test('packed npm distribution works under node_modules without sources or instal
   });
 
   await t.test('installed normal mode removes only eligible node_modules', async () => {
-    const normal = run(bin, [target], root);
+    const normal = run(bin, ['--estimate-space', target], root);
     assert.match(normal.stdout, /Estimated freed: 1.50 KiB \| 2 removed \| 1 require --smite/);
     assert.doesNotMatch(normal.stdout, /[\r\x1b]|deleted:|skipped:|node_modules/);
     assert.equal(await exists(eligible), false);
@@ -137,10 +140,10 @@ test('packed npm distribution works under node_modules without sources or instal
 
   await t.test('installed smite preview is nonmutating and smite removes unmarked candidates', async () => {
     const before = await snapshot(target);
-    assert.match(run(bin, ['--smite', '--dry-run', target], root).stdout,
+    assert.match(run(bin, ['--estimate-space', '--smite', '--dry-run', target], root).stdout,
       /Estimated would free: 21 B \| 1 planned \| 0 require --smite/);
     assert.deepEqual(await snapshot(target), before);
-    const removal = run(bin, ['--smite', '--verbose', target], root);
+    const removal = run(bin, ['--estimate-space', '--smite', '--verbose', target], root);
     assert.match(removal.stdout, /Estimated freed: 21 B \| 1 removed \| 0 require --smite/);
     assert.match(removal.stdout, /1 deleted, 0 planned, 0 skipped, 0 errors/);
     assert.equal(await exists(unmarked), false);
@@ -150,13 +153,65 @@ test('packed npm distribution works under node_modules without sources or instal
     const ttyTarget = join(root, 'tty-project');
     const modules = await project(ttyTarget);
     const before = await snapshot(ttyTarget);
-    const writes = runTtyCli(['--dry-run', ttyTarget], root, join(installed, 'dist', 'cli.js'));
-    for (const frame of '⠋⠙⠹') {
-      assert.ok(writes.includes(`${frame} Estimated would free: 0 B | 0 planned | 0 require --smite`));
+    for (const flags of [[], ['--estimate-space']]) {
+      const writes = runTtyCli([...flags, '--dry-run', ttyTarget], root, join(installed, 'dist', 'cli.js'));
+      const initialSize = flags.length ? 'Estimated would free: 0 B | ' : '';
+      const finalSize = flags.length ? 'Estimated would free: 21 B | ' : '';
+      for (const frame of flags.length ? '⠋⠙⠹' : '⠋⠙') {
+        assert.ok(writes.includes(`${frame} ${initialSize}0 planned | 0 require --smite`));
+      }
+      assert.equal(writes.at(-1), `${finalSize}1 planned | 0 require --smite\n`);
+      if (!flags.length) assert.doesNotMatch(writes.join(''), /estimated|bytes|\d B/i);
     }
-    assert.equal(writes.at(-1), 'Estimated would free: 21 B | 1 planned | 0 require --smite\n');
     assert.equal(await exists(modules), true);
     assert.deepEqual(await snapshot(ttyTarget), before);
+  });
+
+  for (const smite of [false, true]) {
+    for (const dryRun of [false, true]) {
+      for (const verbose of [false, true]) {
+        await t.test(`installed default skips size traversal (smite=${smite}, dryRun=${dryRun}, verbose=${verbose})`, async (t) => {
+          for (const guarded of [false, true]) {
+            const target = await fixture(t);
+            const modules = await project(join(target, 'marked'));
+            await project(join(modules, 'nested-project'));
+            const unmarked = join(target, 'unmarked', 'node_modules');
+            await fs.mkdir(unmarked, { recursive: true });
+            const before = await snapshot(target);
+            const args = [...(smite ? ['--smite'] : []), ...(dryRun ? ['--dry-run'] : []), ...(verbose ? ['--verbose'] : []), target];
+            const result = guarded
+              ? runCliWithoutSizeReads(args, root, [modules, unmarked], join(installed, 'dist', 'cli.js'))
+              : run(bin, args, root);
+            assert.doesNotMatch(result.stdout, /estimated|bytes|\d B|[\r\x1b⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/i);
+            assert.match(result.stdout, new RegExp(`${smite ? 2 : 1} ${dryRun ? 'planned' : 'removed'} \\| ${smite ? 0 : 1} require --smite`));
+            if (verbose) {
+              assert.ok(result.stdout.includes(`${dryRun ? 'planned' : 'deleted'}: ${JSON.stringify(modules)}\n`));
+              assert.match(result.stdout, /Summary:/);
+            } else assert.doesNotMatch(result.stdout, /node_modules|planned:|deleted:|skipped:/);
+            if (dryRun) assert.deepEqual(await snapshot(target), before);
+            assert.equal(await exists(modules), dryRun);
+            assert.equal(await exists(unmarked), dryRun || !smite);
+          }
+        });
+      }
+    }
+  }
+
+  await t.test('installed bin distinguishes measured zero and validates the new boolean flag', async (t) => {
+    const target = await fixture(t);
+    const modules = await project(target);
+    await fs.writeFile(join(modules, 'dependency.txt'), '');
+    const before = await snapshot(target);
+    const enabled = run(bin, ['--estimate-space', '--verbose', '--dry-run', target], root);
+    assert.match(enabled.stdout, /estimated 0 B \(0 bytes\)/);
+    assert.match(enabled.stdout, /Estimated would free: 0 B \| 1 planned/);
+    const disabled = run(bin, ['--verbose', '--dry-run', target], root);
+    assert.doesNotMatch(disabled.stdout, /estimated|bytes|\d B/i);
+    for (const args of [
+      ['--estimate-space', '--estimate-space', target], ['--estimate-space=true', target],
+      ['--estimate-space', '--help'], ['--estimate-space', '--version'],
+    ]) assert.match(run(bin, args, root, 2).stderr, /Error:/);
+    assert.deepEqual(await snapshot(target), before);
   });
   assert.deepEqual(await snapshot(installed), installedTree);
 });

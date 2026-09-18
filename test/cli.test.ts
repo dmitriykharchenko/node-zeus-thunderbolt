@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import { join, parse } from 'node:path';
 import { test } from 'node:test';
 import metadata from '../package.json' with { type: 'json' };
-import { exists, fixture, project, runCli, runTtyCli, snapshot } from './helpers.ts';
+import { exists, fixture, project, runCli, runCliWithoutSizeReads, runTtyCli, snapshot } from './helpers.ts';
 
 test('help and version work without a path and do not mutate files', async (t) => {
   const root = await fixture(t);
@@ -12,9 +12,11 @@ test('help and version work without a path and do not mutate files', async (t) =
   const help = runCli(['--help'], root);
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /Usage: nzt/);
-  for (const flag of ['--smite', '--dry-run', '--verbose', '--help', '--version']) assert.ok(help.stdout.includes(flag));
+  for (const flag of ['--smite', '--dry-run', '--verbose', '--estimate-space', '--help', '--version']) assert.ok(help.stdout.includes(flag));
   assert.match(help.stdout, /logical regular-file bytes/);
   assert.match(help.stdout, /Braille spinner/);
+  assert.match(help.stdout, /Neither --dry-run nor --verbose enables estimates/);
+  assert.match(help.stdout, /nzt --estimate-space --dry-run/);
   const version = runCli(['--version'], root);
   assert.equal(version.status, 0, version.stderr);
   assert.equal(version.stdout.trim(), metadata.version);
@@ -31,6 +33,8 @@ test('invalid arguments fail before deleting an otherwise eligible candidate', a
     [root, '--dry-run', '--dry-run'], ['--version', root],
     ['--verbose'], ['--verbose=true', root], ['--verbose', '--verbose', root],
     ['--verbose', '--help'], ['--verbose', '--version'],
+    ['--estimate-space'], ['--estimate-space=true', root], ['--estimate-space', '--estimate-space', root],
+    ['--estimate-space', '--help'], ['--estimate-space', '--version'],
   ];
   for (const args of invalid) {
     const result = runCli(args, root);
@@ -51,7 +55,8 @@ test('invalid starting paths are reported with a nonzero status and no mutations
       assert.equal(result.status, 1, result.stderr);
       assert.match(result.stderr, /error:/);
       assert.ok(result.stderr.includes(JSON.stringify(path)));
-      assert.match(result.stdout, /Estimated freed: 0 B \| 0 removed \| 0 require --smite/);
+      assert.match(result.stdout, /0 removed \| 0 require --smite/);
+      assert.doesNotMatch(result.stdout, /estimated|bytes|\d B/i);
       if (verbose.length) assert.match(result.stdout, /0 deleted, 0 planned, 0 skipped, 1 errors/);
     }
   }
@@ -69,7 +74,7 @@ test('relative paths with spaces, dry-run output, skipped paths, and deletion su
   const skipped = join(path, 'unmarked', 'node_modules');
   await fs.mkdir(skipped, { recursive: true });
   const before = await snapshot(root);
-  const preview = runCli(['folder with spaces', '--dry-run', '--verbose'], root);
+  const preview = runCli(['folder with spaces', '--dry-run', '--verbose', '--estimate-space'], root);
   assert.equal(preview.status, 0, preview.stderr);
   assert.ok(preview.stdout.includes(`planned: ${JSON.stringify(modules)}`));
   assert.ok(preview.stdout.includes(`skipped: ${JSON.stringify(skipped)}`));
@@ -78,7 +83,7 @@ test('relative paths with spaces, dry-run output, skipped paths, and deletion su
   assert.match(preview.stdout, /requires regular package.json/);
   assert.match(preview.stdout, /Estimated would free: 21 B \| 1 planned \| 1 require --smite/);
   assert.deepEqual(await snapshot(root), before);
-  const deletion = runCli(['--verbose', 'folder with spaces'], root);
+  const deletion = runCli(['--estimate-space', '--verbose', 'folder with spaces'], root);
   assert.equal(deletion.status, 0, deletion.stderr);
   assert.ok(deletion.stdout.includes(`deleted: ${JSON.stringify(modules)}`));
   assert.match(deletion.stdout, /1 deleted, 0 planned, 1 skipped, 0 errors/);
@@ -92,12 +97,12 @@ test('smite honors dry-run and -- permits paths beginning with a dash', async (t
   const root = await fixture(t);
   const modules = join(root, '--project', 'node_modules');
   await fs.mkdir(modules, { recursive: true });
-  const preview = runCli(['--smite', '--dry-run', '--verbose', '--', '--project'], root);
+  const preview = runCli(['--estimate-space', '--smite', '--dry-run', '--verbose', '--', '--project'], root);
   assert.equal(preview.status, 0, preview.stderr);
   assert.match(preview.stdout, /0 deleted, 1 planned/);
   assert.match(preview.stdout, /Estimated would free: 0 B \| 1 planned \| 0 require --smite/);
   assert.equal(await exists(modules), true);
-  const deletion = runCli(['--smite', '--', '--project'], root);
+  const deletion = runCli(['--estimate-space', '--smite', '--', '--project'], root);
   assert.equal(deletion.status, 0, deletion.stderr);
   assert.match(deletion.stdout, /Estimated freed: 0 B \| 1 removed \| 0 require --smite/);
   assert.equal(await exists(modules), false);
@@ -105,12 +110,14 @@ test('smite honors dry-run and -- permits paths beginning with a dash', async (t
 
 test('an empty scan succeeds with a zero summary', async (t) => {
   const root = await fixture(t);
-  const result = runCli([root], root);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, 'Estimated freed: 0 B | 0 removed | 0 require --smite\n');
-  const preview = runCli(['--dry-run', root], root);
-  assert.equal(preview.status, 0, preview.stderr);
-  assert.equal(preview.stdout, 'Estimated would free: 0 B | 0 planned | 0 require --smite\n');
+  for (const flags of [[], ['--estimate-space']]) {
+    const result = runCli([...flags, root], root);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, (flags.length ? 'Estimated freed: 0 B | ' : '') + '0 removed | 0 require --smite\n');
+    const preview = runCli([...flags, '--dry-run', root], root);
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.equal(preview.stdout, (flags.length ? 'Estimated would free: 0 B | ' : '') + '0 planned | 0 require --smite\n');
+  }
 });
 
 test('a real permissions failure exits nonzero but does not stop accessible siblings', async (t) => {
@@ -125,7 +132,7 @@ test('a real permissions failure exits nonzero but does not stop accessible sibl
   await fs.chmod(blocked, 0o000);
   let result: ReturnType<typeof runCli>;
   try {
-    result = runCli([root], root);
+    result = runCli(['--estimate-space', root], root);
   } finally {
     await fs.chmod(blocked, 0o700);
   }
@@ -136,7 +143,7 @@ test('a real permissions failure exits nonzero but does not stop accessible sibl
   assert.equal(await exists(goodModules), false);
 });
 
-test('default pipes contain only increasing aggregate updates, never paths or terminal controls', async (t) => {
+test('opt-in pipes contain only increasing aggregate updates, never paths or terminal controls', async (t) => {
   const root = await fixture(t);
   const a = await project(join(root, 'a'));
   const b = await project(join(root, 'b'));
@@ -150,7 +157,7 @@ test('default pipes contain only increasing aggregate updates, never paths or te
   await fs.writeFile(join(root, 'file-candidate', 'node_modules'), 'not a directory');
   const before = await snapshot(root);
   for (const dryRun of [true, false]) {
-    const result = runCli([...(dryRun ? ['--dry-run'] : []), root], root);
+    const result = runCli(['--estimate-space', ...(dryRun ? ['--dry-run'] : []), root], root);
     assert.equal(result.status, 0, result.stderr);
     // Native TypeScript emits this runtime warning on the supported Node 23.6.0.
     assert.equal(result.stderr.replace(
@@ -192,7 +199,7 @@ test('size-read errors remain visible in both output modes and leave the failing
       await fs.chmod(unreadable, 0o000);
       let result: ReturnType<typeof runCli>;
       try {
-        result = runCli([...(verbose ? ['--verbose'] : []), ...(dryRun ? ['--dry-run'] : []), root], root);
+        result = runCli(['--estimate-space', ...(verbose ? ['--verbose'] : []), ...(dryRun ? ['--dry-run'] : []), root], root);
       } finally {
         await fs.chmod(unreadable, 0o700);
       }
@@ -219,7 +226,7 @@ for (const smite of [false, true]) {
         await fs.writeFile(join(modules, 'dependency.txt'), 'disposable dependency');
       }
       const before = await snapshot(root);
-      const args = [...(smite ? ['--smite'] : []), ...(dryRun ? ['--dry-run'] : []), root];
+      const args = ['--estimate-space', ...(smite ? ['--smite'] : []), ...(dryRun ? ['--dry-run'] : []), root];
       const writes = runTtyCli(args, root);
       const verb = dryRun ? 'would free' : 'freed';
       const count = dryRun ? 'planned' : 'removed';
@@ -239,8 +246,62 @@ test('CLI finally disposes progress when reporting an unexpected failure throws'
   await project(root);
   const before = await snapshot(root);
   const writes = runTtyCli(['--dry-run', root], root, undefined, true);
-  assert.match(writes[0], /^⠋ Estimated would free: 0 B/);
+  assert.match(writes[0], /^⠋ 0 planned \| 0 require --smite/);
   assert.equal(writes.at(-1), '\r\x1b[2K');
   assert.equal(writes.some((text) => text.endsWith('\n')), false, 'do not claim a completed summary');
   assert.deepEqual(await snapshot(root), before);
 });
+
+for (const smite of [false, true]) {
+  for (const dryRun of [false, true]) {
+    for (const verbose of [false, true]) {
+      test(`CLI skips all size reads without opt-in (smite=${smite}, dryRun=${dryRun}, verbose=${verbose})`, async (t) => {
+        const root = await fixture(t);
+        const modules = await project(join(root, 'marked'));
+        await project(join(modules, 'nested-project'));
+        const unmarked = join(root, 'unmarked', 'node_modules');
+        await fs.mkdir(unmarked, { recursive: true });
+        const before = await snapshot(root);
+        const args = [...(smite ? ['--smite'] : []), ...(dryRun ? ['--dry-run'] : []), ...(verbose ? ['--verbose'] : []), root];
+        const result = runCliWithoutSizeReads(args, root, [modules, unmarked]);
+        const count = dryRun ? 'planned' : 'removed';
+        assert.doesNotMatch(result.stdout, /estimated|bytes|\d B|[\r\x1b⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/i);
+        assert.match(result.stdout, new RegExp(`${smite ? 2 : 1} ${count} \\| ${smite ? 0 : 1} require --smite`));
+        if (verbose) {
+          assert.ok(result.stdout.includes(`${dryRun ? 'planned' : 'deleted'}: ${JSON.stringify(modules)}\n`));
+          assert.match(result.stdout, /Summary:/);
+          if (!smite) assert.match(result.stdout, /skipped:.*requires regular package.json/);
+        } else {
+          assert.doesNotMatch(result.stdout, /node_modules|Summary:|skipped:/);
+          const totals = result.stdout.trim().split('\n').map((line) => {
+            const match = /^(\d+) (?:planned|removed) \| (\d+) require --smite$/.exec(line);
+            assert.ok(match, line);
+            return match.slice(1).map(Number);
+          });
+          assert.equal(totals.length, 3);
+          for (let i = 1; i < totals.length; i++) {
+            assert.ok(totals[i][0] >= totals[i - 1][0]);
+            assert.ok(totals[i][1] >= totals[i - 1][1]);
+          }
+        }
+        if (dryRun) assert.deepEqual(await snapshot(root), before);
+        assert.equal(await exists(modules), dryRun);
+        assert.equal(await exists(unmarked), dryRun || !smite);
+      });
+    }
+
+    test(`default CLI animates during scanning without bytes (smite=${smite}, dryRun=${dryRun})`, async (t) => {
+      const root = await fixture(t);
+      const modules = await project(root);
+      const before = await snapshot(root);
+      const writes = runTtyCli([...(smite ? ['--smite'] : []), ...(dryRun ? ['--dry-run'] : []), root], root);
+      const count = dryRun ? 'planned' : 'removed';
+      assert.ok(writes.includes(`⠋ 0 ${count} | 0 require --smite`));
+      assert.ok(writes.includes(`⠙ 0 ${count} | 0 require --smite`));
+      assert.equal(writes.at(-1), `1 ${count} | 0 require --smite\n`);
+      assert.doesNotMatch(writes.join(''), /estimated|bytes|\d B/i);
+      if (dryRun) assert.deepEqual(await snapshot(root), before);
+      assert.equal(await exists(modules), dryRun);
+    });
+  }
+}

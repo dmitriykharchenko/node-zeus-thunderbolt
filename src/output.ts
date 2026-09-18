@@ -16,16 +16,18 @@ type Output = { write: (text: string) => unknown; isTTY?: boolean };
 export function createReporter(options: {
   dryRun?: boolean;
   verbose?: boolean;
+  estimateSpace?: boolean;
   stdout: Output;
   stderr: Output;
 }) {
-  const { stdout, stderr, dryRun, verbose } = options;
+  const { stdout, stderr, dryRun, verbose, estimateSpace } = options;
   const animated = stdout.isTTY && !verbose;
   const frames = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
   let frame = 0;
   let latest: Readonly<PruneSummary> = {
     deleted: 0, planned: 0, skipped: 0, errors: 0,
-    deletedBytes: 0, plannedBytes: 0, requiresSmite: 0,
+    deletedBytes: estimateSpace ? 0 : null,
+    plannedBytes: estimateSpace ? 0 : null, requiresSmite: 0,
   };
   let timer: ReturnType<typeof setInterval> | undefined;
   let stopped = false;
@@ -43,8 +45,9 @@ export function createReporter(options: {
   const progress = (summary: Readonly<PruneSummary>, final = false) => {
     const bytes = dryRun ? summary.plannedBytes : summary.deletedBytes;
     const count = dryRun ? summary.planned : summary.deleted;
-    const message = `Estimated ${dryRun ? 'would free' : 'freed'}: ${formatBytes(bytes)}`
-      + ` | ${count} ${dryRun ? 'planned' : 'removed'} | ${summary.requiresSmite} require --smite`;
+    const size = estimateSpace && bytes !== null
+      ? `Estimated ${dryRun ? 'would free' : 'freed'}: ${formatBytes(bytes)} | ` : '';
+    const message = `${size}${count} ${dryRun ? 'planned' : 'removed'} | ${summary.requiresSmite} require --smite`;
     if (animated) {
       clearProgress();
       stdout.write((final ? '' : `${frames[frame]} `) + message + (final ? '\n' : ''));
@@ -73,7 +76,8 @@ export function createReporter(options: {
       latest = summary;
       if (event.kind === 'error' || verbose) {
         clearProgress();
-        const size = 'bytes' in event ? ` — estimated ${formatBytes(event.bytes)} (${event.bytes} bytes)` : '';
+        const size = estimateSpace && 'bytes' in event && event.bytes !== null
+          ? ` — estimated ${formatBytes(event.bytes)} (${event.bytes} bytes)` : '';
         const reason = event.reason ? ` — ${event.reason}` : '';
         const message = `${event.kind}: ${JSON.stringify(event.path)}${size}${reason}\n`;
         (event.kind === 'error' ? stderr : stdout).write(message);

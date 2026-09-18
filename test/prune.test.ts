@@ -14,9 +14,9 @@ for (const lockfile of lockfiles) {
     const result = await prune(root, { onEvent: (event) => events.push(event) });
     assert.deepEqual(result, {
       deleted: 1, planned: 0, skipped: 0, errors: 0,
-      deletedBytes: 21, plannedBytes: 0, requiresSmite: 0,
+      deletedBytes: null, plannedBytes: null, requiresSmite: 0,
     });
-    assert.deepEqual(events, [{ kind: 'deleted', path: modules, bytes: 21 }]);
+    assert.deepEqual(events, [{ kind: 'deleted', path: modules, bytes: null }]);
     assert.equal(await exists(modules), false);
     assert.equal(await fs.readFile(join(root, 'keep.txt'), 'utf8'), 'keep');
     assert.equal(await exists(join(root, 'package.json')), true);
@@ -62,7 +62,7 @@ test('requires both markers in the immediate parent and never scans skipped depe
   });
   assert.deepEqual(await prune(root), {
     deleted: 0, planned: 0, skipped: 3, errors: 0,
-    deletedBytes: 0, plannedBytes: 0, requiresSmite: 3,
+    deletedBytes: null, plannedBytes: null, requiresSmite: 3,
   });
   t.mock.restoreAll();
   assert.deepEqual(await snapshot(root), before);
@@ -96,17 +96,17 @@ test('smite bypasses only markers and dry-run leaves a byte-identical tree', asy
   const before = await snapshot(root);
   assert.deepEqual(await prune(root, { dryRun: true }), {
     deleted: 0, planned: 1, skipped: 1, errors: 0,
-    deletedBytes: 0, plannedBytes: 21, requiresSmite: 1,
+    deletedBytes: null, plannedBytes: null, requiresSmite: 1,
   });
   assert.deepEqual(await snapshot(root), before);
   assert.deepEqual(await prune(root, { smite: true, dryRun: true }), {
     deleted: 0, planned: 2, skipped: 0, errors: 0,
-    deletedBytes: 0, plannedBytes: 21, requiresSmite: 0,
+    deletedBytes: null, plannedBytes: null, requiresSmite: 0,
   });
   assert.deepEqual(await snapshot(root), before);
   assert.deepEqual(await prune(root, { smite: true }), {
     deleted: 2, planned: 0, skipped: 0, errors: 0,
-    deletedBytes: 21, plannedBytes: 0, requiresSmite: 0,
+    deletedBytes: null, plannedBytes: null, requiresSmite: 0,
   });
   assert.equal(await fs.readFile(join(root, 'keep'), 'utf8'), 'untouched');
 });
@@ -192,7 +192,7 @@ test('read, marker, and removal failures are visible and accessible siblings sti
   const result = await prune(root, { onEvent: (event) => events.push(event) });
   assert.deepEqual(result, {
     deleted: 1, planned: 0, skipped: 0, errors: 3,
-    deletedBytes: 21, plannedBytes: 0, requiresSmite: 0,
+    deletedBytes: null, plannedBytes: null, requiresSmite: 0,
   });
   assert.equal(events.filter((event) => event.kind === 'error' && event.reason?.includes('EACCES')).length, 3);
   assert.equal(await exists(good), false);
