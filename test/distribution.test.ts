@@ -5,7 +5,7 @@ import { delimiter, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import metadata from '../package.json' with { type: 'json' };
-import { exists, fixture, project, snapshot } from './helpers.ts';
+import { exists, fixture, project, runTtyCli, snapshot } from './helpers.ts';
 
 const repository = fileURLToPath(new URL('../', import.meta.url));
 const packageFiles = ['README.md', 'dist/cli.js', 'dist/output.js', 'dist/prune.js', 'package.json'];
@@ -80,6 +80,7 @@ test('packed npm distribution works under node_modules without sources or instal
     const help = run(bin, ['--help'], root).stdout;
     assert.match(help, /Usage: nzt/);
     assert.match(help, /--verbose/);
+    assert.match(help, /Braille spinner/);
     assert.equal(run(bin, ['--version'], root).stdout.trim(), metadata.version);
   });
 
@@ -107,7 +108,7 @@ test('packed npm distribution works under node_modules without sources or instal
     const before = await snapshot(target);
     const preview = run(bin, ['--dry-run', target], root);
     assert.match(preview.stdout, /Estimated would free: 1.50 KiB \| 2 planned \| 1 require --smite/);
-    assert.doesNotMatch(preview.stdout, /[\r\x1b]|planned:|skipped:|node_modules/);
+    assert.doesNotMatch(preview.stdout, /[\r\x1b⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|planned:|skipped:|node_modules/);
     assert.equal(preview.stdout.trim().split('\n').length, 4);
     assert.match(preview.stdout, /\| 1 planned \|/);
     assert.deepEqual(await snapshot(target), before);
@@ -120,6 +121,7 @@ test('packed npm distribution works under node_modules without sources or instal
     assert.ok(preview.stdout.includes(`skipped: ${JSON.stringify(unmarked)}`));
     assert.match(preview.stdout, /requires regular package.json/);
     assert.match(preview.stdout, /0 deleted, 2 planned, 1 skipped, 0 errors/);
+    assert.doesNotMatch(preview.stdout, /[\r\x1b⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
     assert.deepEqual(await snapshot(target), before);
   });
 
@@ -143,6 +145,18 @@ test('packed npm distribution works under node_modules without sources or instal
     assert.match(removal.stdout, /1 deleted, 0 planned, 0 skipped, 0 errors/);
     assert.equal(await exists(unmarked), false);
     assert.equal(await fs.readFile(join(dirname(eligible), 'keep.txt'), 'utf8'), 'keep');
+  });
+  await t.test('installed entry point animates TTY scans and finishes without a spinner', async () => {
+    const ttyTarget = join(root, 'tty-project');
+    const modules = await project(ttyTarget);
+    const before = await snapshot(ttyTarget);
+    const writes = runTtyCli(['--dry-run', ttyTarget], root, join(installed, 'dist', 'cli.js'));
+    for (const frame of '⠋⠙⠹') {
+      assert.ok(writes.includes(`${frame} Estimated would free: 0 B | 0 planned | 0 require --smite`));
+    }
+    assert.equal(writes.at(-1), 'Estimated would free: 21 B | 1 planned | 0 require --smite\n');
+    assert.equal(await exists(modules), true);
+    assert.deepEqual(await snapshot(ttyTarget), before);
   });
   assert.deepEqual(await snapshot(installed), installedTree);
 });

@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import { join, parse } from 'node:path';
 import { test } from 'node:test';
 import metadata from '../package.json' with { type: 'json' };
-import { exists, fixture, project, runCli, snapshot } from './helpers.ts';
+import { exists, fixture, project, runCli, runTtyCli, snapshot } from './helpers.ts';
 
 test('help and version work without a path and do not mutate files', async (t) => {
   const root = await fixture(t);
@@ -14,6 +14,7 @@ test('help and version work without a path and do not mutate files', async (t) =
   assert.match(help.stdout, /Usage: nzt/);
   for (const flag of ['--smite', '--dry-run', '--verbose', '--help', '--version']) assert.ok(help.stdout.includes(flag));
   assert.match(help.stdout, /logical regular-file bytes/);
+  assert.match(help.stdout, /Braille spinner/);
   const version = runCli(['--version'], root);
   assert.equal(version.status, 0, version.stderr);
   assert.equal(version.stdout.trim(), metadata.version);
@@ -156,7 +157,7 @@ test('default pipes contain only increasing aggregate updates, never paths or te
       /\(node:\d+\) ExperimentalWarning: Type Stripping is an experimental feature and might change at any time\n\(Use `node --trace-warnings \.\.\.` to show where the warning was created\)\n/,
       '',
     ), '');
-    assert.doesNotMatch(result.stdout, /[\r\x1b]|node_modules|skipped:|Summary:/);
+    assert.doesNotMatch(result.stdout, /[\r\x1b⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]|node_modules|skipped:|Summary:/);
     assert.ok(!result.stdout.includes(root));
     const lines = result.stdout.trim().split('\n');
     assert.equal(lines.length, 5, 'four candidates update progress before the final state');
@@ -206,4 +207,40 @@ test('size-read errors remain visible in both output modes and leave the failing
       assert.equal(await exists(good), dryRun);
     }
   }
+});
+
+for (const smite of [false, true]) {
+  for (const dryRun of [false, true]) {
+    test(`TTY spinner runs during scanning and measuring (smite=${smite}, dry-run=${dryRun})`, async (t) => {
+      const root = await fixture(t);
+      const modules = smite ? join(root, 'node_modules') : await project(root);
+      if (smite) {
+        await fs.mkdir(modules);
+        await fs.writeFile(join(modules, 'dependency.txt'), 'disposable dependency');
+      }
+      const before = await snapshot(root);
+      const args = [...(smite ? ['--smite'] : []), ...(dryRun ? ['--dry-run'] : []), root];
+      const writes = runTtyCli(args, root);
+      const verb = dryRun ? 'would free' : 'freed';
+      const count = dryRun ? 'planned' : 'removed';
+      for (const frame of '⠋⠙⠹') {
+        assert.ok(writes.includes(`${frame} Estimated ${verb}: 0 B | 0 ${count} | 0 require --smite`));
+      }
+      assert.equal(writes.at(-1), `Estimated ${verb}: 21 B | 1 ${count} | 0 require --smite\n`);
+      assert.equal(writes.join('').split('\n').length, 2);
+      if (dryRun) assert.deepEqual(await snapshot(root), before);
+      assert.equal(await exists(modules), dryRun);
+    });
+  }
+}
+
+test('CLI finally disposes progress when reporting an unexpected failure throws', async (t) => {
+  const root = await fixture(t);
+  await project(root);
+  const before = await snapshot(root);
+  const writes = runTtyCli(['--dry-run', root], root, undefined, true);
+  assert.match(writes[0], /^⠋ Estimated would free: 0 B/);
+  assert.equal(writes.at(-1), '\r\x1b[2K');
+  assert.equal(writes.some((text) => text.endsWith('\n')), false, 'do not claim a completed summary');
+  assert.deepEqual(await snapshot(root), before);
 });

@@ -1,7 +1,8 @@
+import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import type { TestContext } from 'node:test';
 
@@ -41,6 +42,55 @@ export function runCli(args: string[], cwd: string) {
   if (result.error) throw result.error;
   if (result.signal) throw new Error(`CLI terminated by ${result.signal}`);
   return result;
+}
+
+export function runTtyCli(args: string[], cwd: string, entry = cli, unexpectedFailure = false): string[] {
+  // Child-local stream/timer mocks exercise the actual entry point without a PTY or sleeps.
+  const script = `
+    import assert from 'node:assert/strict';
+    import { promises as fs } from 'node:fs';
+    import { mock } from 'node:test';
+    mock.timers.enable({ apis: ['setInterval'] });
+    const interval = mock.method(globalThis, 'setInterval');
+    const clear = mock.method(globalThis, 'clearInterval');
+    const writes = [];
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    mock.method(process.stdout, 'write', (text) => { writes.push(text); return true; });
+    const readdir = fs.readdir;
+    mock.method(fs, 'readdir', async (...args) => {
+      mock.timers.tick(80);
+      if (${unexpectedFailure}) throw new Error('injected scan failure');
+      return readdir(...args);
+    });
+    process.argv = [process.execPath, ${JSON.stringify(entry)}, ...${JSON.stringify(args)}];
+    if (${unexpectedFailure}) {
+      const stderrWrite = process.stderr.write;
+      mock.method(process.stderr, 'write', function (text, ...args) {
+        if (String(text).startsWith('error:')) throw new Error('unexpected reporter failure');
+        return stderrWrite.call(this, text, ...args);
+      });
+      await assert.rejects(import(${JSON.stringify(pathToFileURL(entry).href)}), /unexpected reporter failure/);
+    } else {
+      await import(${JSON.stringify(pathToFileURL(entry).href)});
+    }
+    assert.equal(interval.mock.callCount(), 1);
+    assert.equal(clear.mock.callCount(), 1);
+    assert.equal(clear.mock.calls[0].arguments[0], interval.mock.calls[0].result);
+    const finished = [...writes];
+    mock.timers.tick(800);
+    interval.mock.calls[0].arguments[0]();
+    assert.deepEqual(writes, finished, 'entry point must stop all later writes');
+    mock.restoreAll();
+    mock.timers.reset();
+    process.stdout.write(JSON.stringify(writes));
+  `;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    cwd, encoding: 'utf8', timeout: 15_000,
+  });
+  if (result.error) throw result.error;
+  assert.equal(result.signal, null, result.stderr);
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
 }
 
 export async function snapshot(root: string): Promise<Record<string, string>> {

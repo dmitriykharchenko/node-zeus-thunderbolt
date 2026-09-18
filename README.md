@@ -53,9 +53,11 @@ By default stdout shows only running aggregate counters, for example:
 `Estimated freed: 1.50 MiB | 3 removed | 2 require --smite`.
 With `--dry-run` it reports estimated bytes that **would** be freed and the number
 of planned directories instead. Updates appear as candidates are processed, with
-a final state even when nothing matches. Interactive terminals refresh one line;
-pipes and redirected output receive plain newline-delimited updates, without
-terminal escapes or carriage returns.
+a final state even when nothing matches. Compact interactive terminals refresh
+one line with a small Braille spinner every 80 ms, starting at zero and staying
+active while scanning and measuring. The final line is static, without a spinner.
+Verbose output never animates. Pipes and redirected output receive plain
+newline-delimited updates, without a spinner, terminal escapes, or carriage returns.
 
 The `require --smite` count means **additional** real `node_modules` directories
 skipped only because their immediate parent lacks regular manifest/lockfile

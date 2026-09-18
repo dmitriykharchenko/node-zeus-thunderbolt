@@ -19,8 +19,10 @@ only to estimate sizes, never to discover more projects. Skipped trees are not r
 
 Default output: running estimated freed/would-free bytes, removed/planned
 directories, and additional candidates requiring --smite (zero with --smite).
-TTY output refreshes one line; pipes get plain newline updates. Errors always
-go to stderr. Sizes sum logical regular-file bytes without following symlinks,
+Compact TTY output has a Braille spinner while scanning and measuring, then a
+static final line. Verbose output and pipes never animate; pipes get plain
+newline updates. Errors always go to stderr.
+Sizes sum logical regular-file bytes without following symlinks,
 not exact disk reclamation (hardlinks, sparse/shared files, and metadata differ).
 Measuring adds a file-metadata scan before each removal, also in --dry-run.
 
@@ -74,13 +76,17 @@ async function main() {
     return;
   }
   const reporter = createReporter({ ...args, stdout: process.stdout, stderr: process.stderr });
-  const summary = await prune(args.path, {
-    smite: args.smite,
-    dryRun: args.dryRun,
-    onEvent: reporter.onEvent,
-  });
-  reporter.finish(summary);
-  process.exitCode = summary.errors > 0 ? 1 : 0;
+  try {
+    const summary = await prune(args.path, {
+      smite: args.smite,
+      dryRun: args.dryRun,
+      onEvent: reporter.onEvent,
+    });
+    reporter.finish(summary);
+    process.exitCode = summary.errors > 0 ? 1 : 0;
+  } finally {
+    reporter.dispose();
+  }
 }
 
 await main();
