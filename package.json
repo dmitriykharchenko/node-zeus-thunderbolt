@@ -1,0 +1,24 @@
+{
+  "name": "node-zeus-thunderbolt",
+  "version": "0.1.0",
+  "description": "Recursively prune eligible node_modules directories",
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "start": "node src/cli.ts",
+    "build": "node scripts/build.ts",
+    "prepack": "npm run build",
+    "test:distribution": "node --test test/distribution.test.ts"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=23.6.0"
+  },
+  "bin": {
+    "nzt": "dist/cli.js"
+  },
+  "files": [
+    "dist/cli.js",
+    "dist/prune.js",
+    "dist/output.js"
+  ]
+}
