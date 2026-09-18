@@ -1,0 +1,13 @@
+{
+  "name": "node-modules-prune",
+  "version": "0.1.0",
+  "description": "Recursively prune eligible node_modules directories",
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "start": "node src/cli.ts"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=23.6.0"
+  }
+}
