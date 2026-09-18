@@ -8,15 +8,28 @@ export const lockfiles = [
 ] as const;
 
 export type PruneEvent = {
-  kind: 'deleted' | 'planned' | 'skipped' | 'error';
   path: string;
   reason?: string;
+} & (
+  | { kind: 'deleted' | 'planned'; bytes: number }
+  | { kind: 'skipped'; requiresSmite?: boolean }
+  | { kind: 'error' }
+);
+
+export type PruneSummary = {
+  deleted: number;
+  planned: number;
+  skipped: number;
+  errors: number;
+  deletedBytes: number;
+  plannedBytes: number;
+  requiresSmite: number;
 };
 
 export type PruneOptions = {
   smite?: boolean;
   dryRun?: boolean;
-  onEvent?: (event: PruneEvent) => void;
+  onEvent?: (event: PruneEvent, summary: Readonly<PruneSummary>) => void;
 };
 
 type Directory = { path: string; stat: Stats; parent?: Directory };
@@ -64,12 +77,42 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export async function prune(input: string, options: PruneOptions = {}) {
-  const summary = { deleted: 0, planned: 0, skipped: 0, errors: 0 };
+// This is size traversal only, never discovery of nested pruning candidates.
+async function measureBytes(candidate: Directory): Promise<number> {
+  const pending = [candidate];
+  let bytes = 0;
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    await assertUnchanged(directory);
+    const entries = await fs.readdir(directory.path, { withFileTypes: true });
+    for (const entry of entries) {
+      await assertUnchanged(directory);
+      const path = join(directory.path, entry.name);
+      const stat = await fs.lstat(path);
+      if (entry.isDirectory() && (!stat.isDirectory() || stat.isSymbolicLink())) {
+        throw new Error(`Directory changed during size scan: ${path}; retry with a stable tree`);
+      }
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) pending.push({ path, stat, parent: directory });
+      else if (stat.isFile()) bytes += stat.size;
+    }
+    await assertUnchanged(directory);
+  }
+  return bytes;
+}
+
+export async function prune(input: string, options: PruneOptions = {}): Promise<PruneSummary> {
+  const summary: PruneSummary = {
+    deleted: 0, planned: 0, skipped: 0, errors: 0,
+    deletedBytes: 0, plannedBytes: 0, requiresSmite: 0,
+  };
   const emit = (event: PruneEvent) => {
     if (event.kind === 'error') summary.errors++;
     else summary[event.kind]++;
-    options.onEvent?.(event);
+    if (event.kind === 'deleted') summary.deletedBytes += event.bytes;
+    if (event.kind === 'planned') summary.plannedBytes += event.bytes;
+    if (event.kind === 'skipped' && event.requiresSmite) summary.requiresSmite++;
+    options.onEvent?.(event, { ...summary });
   };
 
   let root: Directory;
@@ -101,20 +144,33 @@ export async function prune(input: string, options: PruneOptions = {}) {
     try {
       await assertUnchanged(directory);
       if (basename(directory.path) === 'node_modules') {
-        if (!options.smite && !await eligible(dirname(directory.path))) {
-          emit({ kind: 'skipped', path: directory.path, reason: 'requires regular package.json and a recognized lockfile in its parent' });
-          continue;
-        }
         const withinRoot = relative(root.path, directory.path);
         if (withinRoot === '..' || withinRoot.startsWith(`..${sep}`)) {
           throw new Error('Candidate escaped the starting directory');
         }
+        const skipMissingMarkers = () => emit({
+          kind: 'skipped', path: directory.path, requiresSmite: true,
+          reason: 'requires regular package.json and a recognized lockfile in its parent',
+        });
+        const canPrune = options.smite || await eligible(dirname(directory.path));
         await assertUnchanged(directory);
+        if (!canPrune) {
+          skipMissingMarkers();
+          continue;
+        }
+        const bytes = await measureBytes(directory);
+        // Measuring can take time: refresh marker and path safety before acting.
+        const stillEligible = options.smite || await eligible(dirname(directory.path));
+        await assertUnchanged(directory);
+        if (!stillEligible) {
+          skipMissingMarkers();
+          continue;
+        }
         if (options.dryRun) {
-          emit({ kind: 'planned', path: directory.path });
+          emit({ kind: 'planned', path: directory.path, bytes });
         } else {
           await fs.rm(directory.path, { recursive: true, force: false });
-          emit({ kind: 'deleted', path: directory.path });
+          emit({ kind: 'deleted', path: directory.path, bytes });
         }
         continue;
       }

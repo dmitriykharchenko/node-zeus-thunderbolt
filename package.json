@@ -18,6 +18,7 @@
   },
   "files": [
     "dist/cli.js",
-    "dist/prune.js"
+    "dist/prune.js",
+    "dist/output.js"
   ]
 }

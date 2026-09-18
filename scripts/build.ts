@@ -4,7 +4,7 @@ import { stripTypeScriptTypes } from 'node:module';
 const root = new URL('../', import.meta.url);
 await mkdir(new URL('dist/', root), { recursive: true });
 
-for (const name of ['cli', 'prune']) {
+for (const name of ['cli', 'prune', 'output']) {
   const source = await readFile(new URL(`src/${name}.ts`, root), 'utf8');
   // These modules use static relative imports; JSON and node: imports stay intact.
   const javascript = stripTypeScriptTypes(source, { mode: 'strip' })

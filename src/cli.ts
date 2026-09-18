@@ -1,18 +1,28 @@
 #!/usr/bin/env node
 import metadata from '../package.json' with { type: 'json' };
 import { prune } from './prune.ts';
+import { createReporter } from './output.ts';
 
-const help = `Usage: nzt [--smite] [--dry-run] <directory>
+const help = `Usage: nzt [--smite] [--dry-run] [--verbose] <directory>
 
 Recursively remove node_modules when its immediate parent has regular files
 named package.json and package-lock.json, npm-shrinkwrap.json, yarn.lock,
-pnpm-lock.yaml, bun.lock, or bun.lockb. Dependency trees are never scanned.
+pnpm-lock.yaml, bun.lock, or bun.lockb. Eligible dependency trees are scanned
+only to estimate sizes, never to discover more projects. Skipped trees are not read.
 
   --smite     Remove node_modules even without manifest/lockfile markers
   --dry-run   Show what would be removed without deleting anything
+  --verbose   Show each path, estimated size, skip reason, and final counts
   --help      Show this help
   --version   Show the version
   --          End options (for paths beginning with a dash)
+
+Default output: running estimated freed/would-free bytes, removed/planned
+directories, and additional candidates requiring --smite (zero with --smite).
+TTY output refreshes one line; pipes get plain newline updates. Errors always
+go to stderr. Sizes sum logical regular-file bytes without following symlinks,
+not exact disk reclamation (hardlinks, sparse/shared files, and metadata differ).
+Measuring adds a file-metadata scan before each removal, also in --dry-run.
 
 Deletion is permanent. Preview with --dry-run first. Directory symlinks and
 symlink candidates are skipped. Do not change the tree while pruning.
@@ -26,7 +36,7 @@ function parseArguments(args: string[]) {
     if (!optionsEnded && arg === '--') {
       optionsEnded = true;
     } else if (!optionsEnded && arg.startsWith('-')) {
-      if (!['--smite', '--dry-run', '--help', '--version'].includes(arg)) {
+      if (!['--smite', '--dry-run', '--verbose', '--help', '--version'].includes(arg)) {
         throw new Error(`Unknown option: ${JSON.stringify(arg)}`);
       }
       if (flags.has(arg)) throw new Error(`Repeated option: ${arg}`);
@@ -44,7 +54,10 @@ function parseArguments(args: string[]) {
   if (paths.length !== 1 || paths[0].length === 0) {
     throw new Error('Exactly one nonempty directory path is required');
   }
-  return { path: paths[0], smite: flags.has('--smite'), dryRun: flags.has('--dry-run') };
+  return {
+    path: paths[0], smite: flags.has('--smite'), dryRun: flags.has('--dry-run'),
+    verbose: flags.has('--verbose'),
+  };
 }
 
 async function main() {
@@ -60,16 +73,13 @@ async function main() {
     console.log(args.info);
     return;
   }
+  const reporter = createReporter({ ...args, stdout: process.stdout, stderr: process.stderr });
   const summary = await prune(args.path, {
     smite: args.smite,
     dryRun: args.dryRun,
-    onEvent(event) {
-      const message = `${event.kind}: ${JSON.stringify(event.path)}${event.reason ? ` — ${event.reason}` : ''}`;
-      if (event.kind === 'error') console.error(message);
-      else console.log(message);
-    },
+    onEvent: reporter.onEvent,
   });
-  console.log(`Summary: ${summary.deleted} deleted, ${summary.planned} planned, ${summary.skipped} skipped, ${summary.errors} errors.`);
+  reporter.finish(summary);
   process.exitCode = summary.errors > 0 ? 1 : 0;
 }
 

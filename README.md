@@ -23,6 +23,7 @@ invoke `./node_modules/.bin/nzt` (or `node_modules\.bin\nzt.cmd` on Windows).
 - Preview **all** candidates, including unmarked ones:
   `nzt --smite --dry-run /path/to/projects`
 - Remove all candidates: `nzt --smite /path/to/projects`
+- Show paths, sizes, and skip reasons: `nzt --verbose --dry-run /path/to/projects`
 - Quote paths containing spaces: `nzt --dry-run "./my projects"`.
 - Use `--` for paths starting with a dash: `nzt --dry-run -- -project`.
 
@@ -42,8 +43,39 @@ By default a real directory named exactly `node_modules` is removed only if its
 
 File contents are not parsed. Directories or symlinks with these marker names do
 not count. Markers in an ancestor workspace do not qualify a nested candidate.
-Unmarked candidates are skipped. Dependency trees are never traversed to discover
-more projects, even when a candidate is skipped.
+Unmarked candidates are skipped and their contents are never read. Eligible
+dependency trees are traversed only to measure size, never to discover more
+projects. Nested dependencies are included in their containing candidate's size.
+
+### Progress and size estimates
+
+By default stdout shows only running aggregate counters, for example:
+`Estimated freed: 1.50 MiB | 3 removed | 2 require --smite`.
+With `--dry-run` it reports estimated bytes that **would** be freed and the number
+of planned directories instead. Updates appear as candidates are processed, with
+a final state even when nothing matches. Interactive terminals refresh one line;
+pipes and redirected output receive plain newline-delimited updates, without
+terminal escapes or carriage returns.
+
+The `require --smite` count means **additional** real `node_modules` directories
+skipped only because their immediate parent lacks regular manifest/lockfile
+markers. It excludes symlinks, unsafe paths, and filesystem errors, and is zero
+when `--smite` is active because those candidates already count as removed/planned.
+
+Use `--verbose` with any pruning mode for each candidate's full path and size,
+skip reasons, aggregate totals, and deleted/planned/skipped/error counts. Errors
+always appear on stderr, whether or not verbose output is enabled.
+
+Sizes use B/KiB/MiB/GiB/TiB and sum **logical regular-file sizes**, not physical
+disk free-space deltas. Symlinks are never followed or counted; directory sizes
+and other non-regular files are excluded. Each hardlink pathname is counted, so
+hardlinked dependencies (including pnpm stores), sparse/compressed/shared files,
+and filesystem metadata can make actual reclaimed space differ substantially.
+Measurement adds a file-metadata scan before every eligible removal, including
+dry-runs; file contents are not read. A measurement failure leaves that candidate
+untouched. Only fully successful removals contribute freed bytes: a partially
+failed removal may free some space but contributes no bytes or removed directory
+to the counters. Skipped and failed candidates never inflate byte totals.
 
 ### Safety and errors
 
@@ -64,8 +96,8 @@ race risks, but cannot make recursive deletion atomic against adversarial
 concurrent filesystem changes. Also keep the installed tool outside the tree
 you intend to prune, so you do not delete its own installation.
 
-The command prints deleted, planned, and skipped paths plus a summary. Errors
-are printed to stderr; accessible sibling projects can still be processed.
+Candidates and their ancestors are revalidated after measurement and before
+deletion. Errors do not stop accessible sibling projects from being processed.
 Exit status is `0` for a successful scan (including no matches), `1` for filesystem
 or unsafe-path errors, and `2` for invalid arguments. Help/version exit `0`.
 
@@ -89,12 +121,12 @@ ships generated JavaScript instead. The dependency-free build uses Node's built-
 shebang and package metadata lookup, and marks the CLI executable. Node may emit
 an experimental-feature warning while building on supported releases.
 
-Only `dist/cli.js`, `dist/prune.js`, `package.json`, and this README are packed.
+Only `dist/cli.js`, `dist/prune.js`, `dist/output.js`, `package.json`, and this README are packed.
 TypeScript sources, tests, build scripts, and fixtures are excluded. The `prepack`
 hook builds only: it does not run tests, avoiding recursive test/pack invocation.
 There are no install-time build hooks; tarball consumers need only Node and npm.
 The distribution test packs a fresh disposable source copy, checks the allowlist,
 installs the tarball into temporary `node_modules` with lifecycle scripts enabled,
-then executes the installed `nzt` in normal, `--smite`, and `--dry-run` modes.
+then executes the installed `nzt` in normal, `--smite`, `--dry-run`, and `--verbose` modes.
 Tests prune only disposable fixtures, never your real projects. Nothing in this
 workflow publishes to npm.
