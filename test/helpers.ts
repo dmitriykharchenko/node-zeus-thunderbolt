@@ -44,6 +44,41 @@ export function runCli(args: string[], cwd: string) {
   return result;
 }
 
+export function runCliWithoutSizeReads(args: string[], cwd: string, candidates: string[], entry = cli) {
+  // Fail deterministically if the real entry point traverses a candidate for sizes.
+  // Native recursive rm remains unmocked and can perform its necessary deletion walk.
+  const script = `
+    import assert from 'node:assert/strict';
+    import { promises as fs } from 'node:fs';
+    import { sep } from 'node:path';
+    import { mock } from 'node:test';
+    const candidates = ${JSON.stringify(candidates)};
+    let attemptedReads = 0;
+    for (const name of ['readdir', 'lstat']) {
+      const original = fs[name].bind(fs);
+      mock.method(fs, name, async (path, ...args) => {
+        if (candidates.some(candidate => String(path).startsWith(candidate + sep)
+          || (name === 'readdir' && String(path) === candidate))) {
+          attemptedReads++;
+          throw new Error('unexpected size traversal');
+        }
+        return original(path, ...args);
+      });
+    }
+    process.argv = [process.execPath, ${JSON.stringify(entry)}, ...${JSON.stringify(args)}];
+    await import(${JSON.stringify(pathToFileURL(entry).href)});
+    assert.equal(attemptedReads, 0, 'CLI must not attempt a size walk');
+    mock.restoreAll();
+  `;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    cwd, encoding: 'utf8', timeout: 15_000,
+  });
+  if (result.error) throw result.error;
+  assert.equal(result.signal, null, result.stderr);
+  assert.equal(result.status, 0, result.stderr);
+  return result;
+}
+
 export function runTtyCli(args: string[], cwd: string, entry = cli, unexpectedFailure = false): string[] {
   // Child-local stream/timer mocks exercise the actual entry point without a PTY or sleeps.
   const script = `

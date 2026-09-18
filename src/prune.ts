@@ -11,7 +11,7 @@ export type PruneEvent = {
   path: string;
   reason?: string;
 } & (
-  | { kind: 'deleted' | 'planned'; bytes: number }
+  | { kind: 'deleted' | 'planned'; bytes: number | null }
   | { kind: 'skipped'; requiresSmite?: boolean }
   | { kind: 'error' }
 );
@@ -21,14 +21,15 @@ export type PruneSummary = {
   planned: number;
   skipped: number;
   errors: number;
-  deletedBytes: number;
-  plannedBytes: number;
+  deletedBytes: number | null;
+  plannedBytes: number | null;
   requiresSmite: number;
 };
 
 export type PruneOptions = {
   smite?: boolean;
   dryRun?: boolean;
+  estimateSpace?: boolean;
   onEvent?: (event: PruneEvent, summary: Readonly<PruneSummary>) => void;
 };
 
@@ -104,13 +105,18 @@ async function measureBytes(candidate: Directory): Promise<number> {
 export async function prune(input: string, options: PruneOptions = {}): Promise<PruneSummary> {
   const summary: PruneSummary = {
     deleted: 0, planned: 0, skipped: 0, errors: 0,
-    deletedBytes: 0, plannedBytes: 0, requiresSmite: 0,
+    deletedBytes: options.estimateSpace ? 0 : null,
+    plannedBytes: options.estimateSpace ? 0 : null, requiresSmite: 0,
   };
   const emit = (event: PruneEvent) => {
     if (event.kind === 'error') summary.errors++;
     else summary[event.kind]++;
-    if (event.kind === 'deleted') summary.deletedBytes += event.bytes;
-    if (event.kind === 'planned') summary.plannedBytes += event.bytes;
+    if (event.kind === 'deleted' && event.bytes !== null && summary.deletedBytes !== null) {
+      summary.deletedBytes += event.bytes;
+    }
+    if (event.kind === 'planned' && event.bytes !== null && summary.plannedBytes !== null) {
+      summary.plannedBytes += event.bytes;
+    }
     if (event.kind === 'skipped' && event.requiresSmite) summary.requiresSmite++;
     options.onEvent?.(event, { ...summary });
   };
@@ -158,8 +164,8 @@ export async function prune(input: string, options: PruneOptions = {}): Promise<
           skipMissingMarkers();
           continue;
         }
-        const bytes = await measureBytes(directory);
-        // Measuring can take time: refresh marker and path safety before acting.
+        const bytes = options.estimateSpace ? await measureBytes(directory) : null;
+        // Refresh marker and path safety before acting, including after optional measurement.
         const stillEligible = options.smite || await eligible(dirname(directory.path));
         await assertUnchanged(directory);
         if (!stillEligible) {

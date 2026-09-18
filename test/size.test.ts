@@ -21,7 +21,7 @@ test('counts deterministic nested regular bytes once per candidate, including ze
   const before = await snapshot(root);
   const events: PruneEvent[] = [];
   const states: Readonly<PruneSummary>[] = [];
-  const preview = await prune(root, { dryRun: true, onEvent(event, summary) {
+  const preview = await prune(root, { estimateSpace: true, dryRun: true, onEvent(event, summary) {
     events.push(event);
     states.push(summary);
   } });
@@ -29,12 +29,13 @@ test('counts deterministic nested regular bytes once per candidate, including ze
     deleted: 0, planned: 3, skipped: 0, errors: 0,
     deletedBytes: 0, plannedBytes: 1034, requiresSmite: 0,
   });
-  assert.deepEqual(events.filter((event) => 'bytes' in event).map((event) => event.bytes).sort((x, y) => x - y), [0, 7, 1027]);
+  assert.deepEqual(events.flatMap((event) => 'bytes' in event && event.bytes !== null ? [event.bytes] : [])
+    .sort((x, y) => x - y), [0, 7, 1027]);
   assert.deepEqual(states.map((state) => state.planned), [1, 2, 3]);
   assert.equal(states[0].planned, 1, 'event summaries are snapshots, not a shared mutable reference');
   assert.deepEqual(await snapshot(root), before);
   const readFile = t.mock.method(fs, 'readFile', () => { throw new Error('measurement must not read file contents'); });
-  const removal = await prune(root);
+  const removal = await prune(root, { estimateSpace: true });
   assert.equal(removal.deleted, 3);
   assert.equal(removal.deletedBytes, 1034);
   assert.equal(removal.plannedBytes, 0);
@@ -70,8 +71,8 @@ test('counts hardlink names but ignores internal links, cycles, external targets
     assert.ok(!path.startsWith(external), `read external link: ${path}`);
     return readdir(path, options);
   });
-  assert.equal((await prune(scan, { dryRun: true })).plannedBytes, 26);
-  const result = await prune(scan);
+  assert.equal((await prune(scan, { estimateSpace: true, dryRun: true })).plannedBytes, 26);
+  const result = await prune(scan, { estimateSpace: true });
   assert.equal(result.deletedBytes, 26);
   assert.equal(result.deleted, 1);
   assert.equal(result.errors, 0);
@@ -90,7 +91,7 @@ test('smite never checks markers for accounting and always has zero additional o
     return lstat(path);
   });
   for (const dryRun of [true, false]) {
-    const result = await prune(root, { smite: true, dryRun });
+    const result = await prune(root, { estimateSpace: true, smite: true, dryRun });
     assert.equal(result.errors, 0);
     assert.equal(result.requiresSmite, 0);
     assert.equal(dryRun ? result.plannedBytes : result.deletedBytes, 9);
@@ -123,7 +124,7 @@ for (const dryRun of [true, false]) {
       return rm(path, options);
     });
     const events: PruneEvent[] = [];
-    const result = await prune(root, { dryRun, onEvent: (event) => events.push(event) });
+    const result = await prune(root, { estimateSpace: true, dryRun, onEvent: (event) => events.push(event) });
     assert.equal(result.errors, 2);
     assert.equal(result.requiresSmite, 0);
     assert.equal(dryRun ? result.plannedBytes : result.deletedBytes, 21);
@@ -149,7 +150,7 @@ test('partial removal failures contribute no freed bytes or successful removal c
     }
     return rm(path, options);
   });
-  const result = await prune(root);
+  const result = await prune(root, { estimateSpace: true });
   assert.equal(result.errors, 1);
   assert.equal(result.deleted, 1);
   assert.equal(result.deletedBytes, 21);
@@ -179,7 +180,7 @@ for (const replaceAncestor of [false, true]) {
       return stat;
     });
     const rm = t.mock.method(fs, 'rm', () => { throw new Error('unsafe removal attempted'); });
-    const result = await prune(scan);
+    const result = await prune(scan, { estimateSpace: true });
     assert.equal(markerChecks, 2, 'swap occurs after measurement at the second eligibility check');
     assert.equal(result.errors, 1);
     assert.equal(result.deletedBytes, 0);
@@ -213,7 +214,7 @@ test('size traversal rejects an internal directory swapped after lstat, before i
     assert.notEqual(path, nested, 'changed directory must never be read');
     return readdir(path, options);
   });
-  const result = await prune(scan);
+  const result = await prune(scan, { estimateSpace: true });
   assert.equal(result.errors, 1);
   assert.equal(result.deleted, 0);
   assert.equal(result.deletedBytes, 0);
@@ -247,7 +248,7 @@ test('smite still performs a fresh safety check after the size traversal finishe
     return canonical;
   });
   const rm = t.mock.method(fs, 'rm', () => { throw new Error('unsafe removal attempted'); });
-  const result = await prune(scan, { smite: true });
+  const result = await prune(scan, { estimateSpace: true, smite: true });
   assert.equal(swapped, true);
   assert.equal(result.errors, 1);
   assert.equal(result.deleted, 0);
@@ -267,7 +268,7 @@ test('markers lost during measurement skip removal without counting measured byt
     if (path === modules) await fs.unlink(join(root, 'package.json'));
     return entries;
   });
-  const result = await prune(root);
+  const result = await prune(root, { estimateSpace: true });
   assert.equal(result.deletedBytes, 0);
   assert.equal(result.skipped, 1);
   assert.equal(result.requiresSmite, 1);
@@ -295,7 +296,7 @@ test('unsafe, errored, symlink and file candidates are not additional smite oppo
     assert.ok(!path.startsWith(unmarked + sep), 'ineligible tree must never be measured');
     return lstat(path);
   });
-  const result = await prune(root);
+  const result = await prune(root, { estimateSpace: true });
   assert.equal(result.errors, 2);
   assert.equal(result.requiresSmite, 1);
   assert.equal(result.deletedBytes, 0);

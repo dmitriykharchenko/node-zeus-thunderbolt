@@ -18,10 +18,10 @@ test('binary size formatting covers zero and every unit boundary through TiB', (
   ] as const) assert.equal(formatBytes(bytes), expected);
 });
 
-function capture(t: TestContext, isTTY = false, verbose = false, dryRun = false) {
+function capture(t: TestContext, isTTY = false, verbose = false, dryRun = false, estimateSpace = false) {
   const writes: { stream: string; text: string }[] = [];
   const reporter = createReporter({
-    verbose, dryRun,
+    verbose, dryRun, estimateSpace,
     stdout: { isTTY, write: (text) => writes.push({ stream: 'out', text }) },
     stderr: { write: (text) => writes.push({ stream: 'err', text }) },
   });
@@ -32,7 +32,7 @@ function capture(t: TestContext, isTTY = false, verbose = false, dryRun = false)
 
 test('TTY refreshes one line and finishes it with exactly one newline', (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] });
-  const { reporter, writes, output } = capture(t, true);
+  const { reporter, writes, output } = capture(t, true, false, false, true);
   assert.equal(output(), '⠋ Estimated freed: 0 B | 0 removed | 0 require --smite');
   const first = { ...zero, deleted: 1, deletedBytes: 100 };
   const last = { ...first, deleted: 2, deletedBytes: 300 };
@@ -47,7 +47,7 @@ test('TTY refreshes one line and finishes it with exactly one newline', (t) => {
 
 test('TTY clears progress before errors and resumes without corrupting the error line', (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] });
-  const { reporter, writes, output } = capture(t, true);
+  const { reporter, writes, output } = capture(t, true, false, false, true);
   const first = { ...zero, deleted: 1, deletedBytes: 50 };
   reporter.onEvent({ kind: 'deleted', path: '/fixture/a', bytes: 50 }, first);
   reporter.onEvent({ kind: 'error', path: '/fixture/b', reason: 'EACCES' }, { ...first, errors: 1 });
@@ -72,7 +72,7 @@ test('TTY clears progress before errors and resumes without corrupting the error
 for (const isTTY of [false, true]) {
   test(`verbose reports paths, raw bytes, reasons and counts (TTY=${isTTY})`, (t) => {
     t.mock.method(globalThis, 'setInterval', () => assert.fail('verbose must not create a timer'));
-    const { reporter, writes, output } = capture(t, isTTY, true, true);
+    const { reporter, writes, output } = capture(t, isTTY, true, true, true);
     const summary = { ...zero, planned: 1, plannedBytes: 1536, skipped: 1, requiresSmite: 1, errors: 1 };
     reporter.onEvent({ kind: 'planned', path: '/fixture/with\nnewline', bytes: 1536 }, summary);
     reporter.onEvent({ kind: 'skipped', path: '/fixture/b', requiresSmite: true, reason: 'missing markers' }, summary);
@@ -91,7 +91,7 @@ for (const isTTY of [false, true]) {
 
 test('piped dry-run progress is plain aggregate-only text and final zero state is always emitted', (t) => {
   t.mock.method(globalThis, 'setInterval', () => assert.fail('pipes must not create a timer'));
-  const { reporter, output } = capture(t, false, false, true);
+  const { reporter, output } = capture(t, false, false, true, true);
   reporter.onEvent({ kind: 'skipped', path: '/fixture/link', reason: 'symlink' }, { ...zero, skipped: 1 });
   assert.equal(output(), '');
   reporter.onEvent({ kind: 'skipped', path: '/fixture/a', requiresSmite: true }, { ...zero, requiresSmite: 1 });
@@ -101,7 +101,7 @@ test('piped dry-run progress is plain aggregate-only text and final zero state i
   const summary = { ...zero, planned: 1, plannedBytes: 7, requiresSmite: 1 };
   reporter.finish(summary);
   assert.ok(output().endsWith('Estimated would free: 7 B | 1 planned | 1 require --smite\n'));
-  const empty = capture(t);
+  const empty = capture(t, false, false, false, true);
   empty.reporter.finish(zero);
   assert.equal(empty.output(), 'Estimated freed: 0 B | 0 removed | 0 require --smite\n');
 });
@@ -116,7 +116,7 @@ test('TTY cycles through Braille frames at 80 ms before any event and unrefs its
     return timer;
   });
   const clear = t.mock.method(globalThis, 'clearInterval');
-  const { reporter, writes } = capture(t, true);
+  const { reporter, writes } = capture(t, true, false, false, true);
   assert.equal(interval.mock.callCount(), 1);
   const timer = interval.mock.calls[0].result;
   assert.equal(unref.mock.callCount(), 1, 'animation must not keep the process alive');
@@ -142,7 +142,7 @@ test('TTY cycles through Braille frames at 80 ms before any event and unrefs its
 for (const dryRun of [false, true]) {
   test(`TTY ticks retain current counters, including require-smite (dry-run=${dryRun})`, (t) => {
     t.mock.timers.enable({ apis: ['setInterval'] });
-    const { reporter, writes } = capture(t, true, false, dryRun);
+    const { reporter, writes } = capture(t, true, false, dryRun, true);
     const summary = { ...zero, planned: 2, plannedBytes: 1536, deleted: 1, deletedBytes: 100, requiresSmite: 3 };
     reporter.onEvent({ kind: dryRun ? 'planned' : 'deleted', path: '/fixture/a', bytes: 100 }, summary);
     const totals = dryRun ? 'would free: 1.50 KiB | 2 planned' : 'freed: 100 B | 1 removed';
@@ -156,7 +156,7 @@ for (const dryRun of [false, true]) {
 
   test(`a quick empty TTY scan ends with a static zero summary (dry-run=${dryRun})`, (t) => {
     t.mock.timers.enable({ apis: ['setInterval'] });
-    const { reporter, writes } = capture(t, true, false, dryRun);
+    const { reporter, writes } = capture(t, true, false, dryRun, true);
     const message = `Estimated ${dryRun ? 'would free' : 'freed'}: 0 B | 0 ${dryRun ? 'planned' : 'removed'} | 0 require --smite`;
     reporter.finish(zero);
     t.mock.timers.tick(800);
@@ -181,6 +181,65 @@ test('dispose clears an interrupted line and stops all further output', (t) => {
   reporter.dispose();
   reporter.finish(zero);
   assert.deepEqual(writes, stopped);
+});
+
+for (const isTTY of [false, true]) {
+  for (const verbose of [false, true]) {
+    for (const dryRun of [false, true]) {
+      test(`disabled estimates retain counters and output lifecycle (TTY=${isTTY}, verbose=${verbose}, dryRun=${dryRun})`, (t) => {
+        t.mock.timers.enable({ apis: ['setInterval'] });
+        const interval = t.mock.method(globalThis, 'setInterval');
+        const clear = t.mock.method(globalThis, 'clearInterval');
+        const { reporter, writes, output } = capture(t, isTTY, verbose, dryRun);
+        const initial = { ...zero, deletedBytes: null, plannedBytes: null };
+        const count = dryRun ? 'planned' : 'removed';
+        const kind = dryRun ? 'planned' : 'deleted';
+        assert.equal(output(), isTTY && !verbose ? `⠋ 0 ${count} | 0 require --smite` : '');
+        t.mock.timers.tick(80);
+        const summary = { ...initial, [kind]: 1, requiresSmite: 2, errors: 1 };
+        reporter.onEvent({ kind, path: '/fixture/a', bytes: null }, summary);
+        reporter.onEvent({ kind: 'skipped', path: '/fixture/b', reason: 'missing markers', requiresSmite: true }, summary);
+        reporter.onEvent({ kind: 'error', path: '/fixture/c', reason: 'EACCES' }, summary);
+        t.mock.timers.tick(80);
+        reporter.finish(summary);
+        assert.doesNotMatch(output(), /estimated|bytes|\d B/i);
+        assert.ok(output().includes(`1 ${count} | 2 require --smite\n`));
+        assert.deepEqual(writes.filter(({ stream }) => stream === 'err'), [
+          { stream: 'err', text: 'error: "/fixture/c" — EACCES\n' },
+        ]);
+        if (verbose) {
+          assert.ok(output().includes(`${kind}: "/fixture/a"\n`));
+          assert.match(output(), /skipped:.*missing markers/);
+          assert.match(output(), /Summary:.*1 errors/);
+        } else assert.doesNotMatch(output(), /fixture|Summary:/);
+        if (!isTTY || verbose) assert.doesNotMatch(output(), /[\r\x1b⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+        else assert.equal(writes.at(-1)?.text, `1 ${count} | 2 require --smite\n`);
+        assert.equal(interval.mock.callCount(), isTTY && !verbose ? 1 : 0);
+        assert.equal(clear.mock.callCount(), interval.mock.callCount());
+        const finished = [...writes];
+        t.mock.timers.tick(800);
+        reporter.dispose();
+        assert.deepEqual(writes, finished);
+      });
+    }
+  }
+}
+
+test('reporter distinguishes measured zero from unavailable bytes and requires explicit opt-in', (t) => {
+  for (const estimateSpace of [false, true]) {
+    for (const bytes of [null, 0]) {
+      const { reporter, output } = capture(t, false, true, false, estimateSpace);
+      reporter.onEvent({ kind: 'deleted', path: '/fixture/empty', bytes }, { ...zero, deleted: 1, deletedBytes: bytes });
+      reporter.finish({ ...zero, deleted: 1, deletedBytes: bytes });
+      if (estimateSpace && bytes === 0) {
+        assert.match(output(), /estimated 0 B \(0 bytes\)/);
+        assert.match(output(), /Estimated freed: 0 B \| 1 removed/);
+      } else {
+        assert.doesNotMatch(output(), /estimated|bytes|\d B/i);
+        assert.match(output(), /deleted: "\/fixture\/empty"\n1 removed/);
+      }
+    }
+  }
 });
 
 for (const failure of ['initial', 'tick', 'finish', 'dispose']) {
