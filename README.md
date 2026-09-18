@@ -149,3 +149,12 @@ then executes the installed `nzt` in normal, `--smite`, `--dry-run`, and `--verb
 modes, both with and without `--estimate-space`.
 Tests prune only disposable fixtures, never your real projects. Nothing in this
 workflow publishes to npm.
+
+### Continuous integration
+
+GitHub Actions runs `npm test` (including packed-install smoke tests),
+`npm run build`, and `npm pack --dry-run` on Ubuntu with Node.js 23.6.0 and 24.x
+for pull requests targeting `main` and pushes to `main`. Manual runs are available
+once the workflow is on the default branch. No project dependency install or cache
+is needed. CI uses read-only repository permissions and does not publish packages
+or upload artifacts.
