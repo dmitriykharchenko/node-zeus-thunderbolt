@@ -8,7 +8,7 @@ import type { TestContext } from 'node:test';
 const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
 
 export async function fixture(t: TestContext): Promise<string> {
-  const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), 'node-modules-prune-test-')));
+  const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), 'nzt-test-')));
   t.after(async () => {
     t.mock.restoreAll();
     await fs.rm(root, { recursive: true, force: true });

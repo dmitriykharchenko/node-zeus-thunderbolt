@@ -2,7 +2,7 @@
 import metadata from '../package.json' with { type: 'json' };
 import { prune } from './prune.ts';
 
-const help = `Usage: node-modules-prune [--smite] [--dry-run] <directory>
+const help = `Usage: nzt [--smite] [--dry-run] <directory>
 
 Recursively remove node_modules when its immediate parent has regular files
 named package.json and package-lock.json, npm-shrinkwrap.json, yarn.lock,
@@ -52,7 +52,7 @@ async function main() {
   try {
     args = parseArguments(process.argv.slice(2));
   } catch (error) {
-    console.error(`Error: ${(error as Error).message}\nRun node-modules-prune --help for usage.`);
+    console.error(`Error: ${(error as Error).message}\nRun nzt --help for usage.`);
     process.exitCode = 2;
     return;
   }

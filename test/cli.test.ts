@@ -11,7 +11,7 @@ test('help and version work without a path and do not mutate files', async (t) =
   const before = await snapshot(root);
   const help = runCli(['--help'], root);
   assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /Usage: node-modules-prune/);
+  assert.match(help.stdout, /Usage: nzt/);
   for (const flag of ['--smite', '--dry-run', '--help', '--version']) assert.ok(help.stdout.includes(flag));
   const version = runCli(['--version'], root);
   assert.equal(version.status, 0, version.stderr);
@@ -31,7 +31,7 @@ test('invalid arguments fail before deleting an otherwise eligible candidate', a
   for (const args of invalid) {
     const result = runCli(args, root);
     assert.equal(result.status, 2, JSON.stringify(args));
-    assert.match(result.stderr, /Error:.*\nRun node-modules-prune --help/);
+    assert.match(result.stderr, /Error:.*\nRun nzt --help/);
   }
   assert.deepEqual(await snapshot(root), before);
 });
